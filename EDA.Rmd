@@ -1,0 +1,1213 @@
+---
+title: "Scrpa"
+author: "Shane Hauck"
+date: "2023-12-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(ggrepel)
+theme_set(theme_bw() + theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank()
+))
+library(ggsoccer)
+library(emoGG)
+```
+
+
+```{r}
+match_full <- read_csv("match_events_for_test.csv")
+```
+
+```{r}
+match_focused <- match_full %>% select(
+  period, timestamp, minute, second,
+  total_score, game_state,
+  possession, team, goal, possession_db_team_id,
+  db_team_id, db_player_id, sb_position,
+  location_x, location_y, area, pattern, event_type,
+  obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+  shot_statsbomb_xg, shot_statsbomb_xg2, shot_key_pass_id,
+  shot_end_location_x, shot_end_location_y, shot_end_location_z,
+  location_x_gk, location_y_gk, dist_to_goal, dist_to_keeper,
+  angle_to_goal, angle_to_keeper, angle_deviation, avevelocity,
+  shot_outcome_name,
+  pass_length, pass_angle, pass_outcome_name,
+  pass_type_name, pass_height_name, ball_receipt_outcome_name,
+  pass_through_ball, pass_cross, pass_end_location_x, pass_end_location_y,
+  db_player_pass_recipient_id,
+  carry_end_location_x, carry_end_location_y,
+  duel_type_name, duel_outcome_name
+)
+
+shots <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    shot_statsbomb_xg, shot_statsbomb_xg2, shot_key_pass_id,
+    shot_end_location_x, shot_end_location_y, shot_end_location_z,
+    location_x_gk, location_y_gk, dist_to_goal, dist_to_keeper,
+    angle_to_goal, angle_to_keeper, angle_deviation, avevelocity,
+    shot_outcome_name
+  ) %>%
+  filter(event_type == "Shot")
+
+passes <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    pass_length, pass_angle, pass_outcome_name,
+    pass_type_name, pass_height_name, ball_receipt_outcome_name,
+    pass_through_ball, pass_cross, pass_end_location_x, pass_end_location_y,
+    db_player_pass_recipient_id
+  ) %>%
+  filter(event_type == "Pass")
+
+carries <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    carry_end_location_x, carry_end_location_y
+  ) %>%
+  filter(event_type == "Carry")
+
+duels <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    duel_type_name, duel_outcome_name
+  ) %>%
+  filter(event_type %in% c(
+    "Pressure", "Duel", "Dispossessed", "Ball Recovery",
+    "Block", "Miscontrol", "Interception", "Shield"
+  ))
+```
+
+```{r}
+duels %>% count(event_type)
+
+duels %>% filter(team == "New York Red Bulls" & event_type == "Pressure") %>%
+  ggplot(aes(x = location_x, y = location_y)) +
+  annotate_pitch() +
+  geom_point() +
+  facet_wrap(~area)
+
+# Plot a time series of the number of pressures per minute
+duels %>%
+  filter(event_type == "Pressure" & area != "Defending 3rd" & team == "New York Red Bulls") %>%
+  mutate(minute3 = floor(minute/3)*3) %>%
+  count(minute3, team, area) %>%
+  ggplot(aes(x = minute3, y = n)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Minute", y = "Number of Pressures")
+
+
+
+
+field_tilt_plot <- match_focused %>% 
+  mutate(minute3 = floor(minute/3)*3) %>%
+  count(minute3, team, area) %>%
+  group_by(minute3, area) %>%
+  mutate(
+    total = sum(n),
+  ) %>%
+  filter(area == "Attacking 3rd" & team == "New York Red Bulls") %>%
+  mutate(prop = n/total,
+         dominating = ifelse(prop >= 0.5, "Yes", "No"))
+
+ggplot(field_tilt_plot, aes(x = minute3, y = prop)) +
+  geom_ribbon(aes(ymax = 0.5, ymin = pmin(prop,.5)), fill = "lightblue", alpha = 0.75) +
+  geom_ribbon(aes(ymax = pmax(prop,.5), ymin = 0.5), fill = "red", alpha = 0.75) +
+  geom_emoji(data = shots %>% filter(shot_outcome_name == "Goal") %>% mutate(minute3 = floor(minute/3)*3), 
+             aes(x = minute3, y = 1.11), emoji="26bd", size = .03) +
+  labs(title = "NYRB Dominated the Field Positioning Battle in the 1st Half.",
+       x = "Minute",
+       y = "Field Tilt",
+       subtitle = "Field Tilt is the proportion of touches taken by NYRB in Attacking 3rd compared to \nsum of Attacking 3rd Touches for Both Teams for every 3 minute interval.")
+
+
+match_focused %>% 
+  mutate(minute3 = floor(minute/3)*3) %>%
+  group_by(minute3, team) %>%
+  summarise(time_in_poss_3 = sum(time_in_poss)) %>%
+  group_by(minute3) %>%
+  mutate(prop = time_in_poss_3/sum(time_in_poss_3)) %>%
+  filter(team == "New York Red Bulls") %>%
+  ggplot(aes(x = minute3, y = prop)) +
+  geom_ribbon(aes(ymax = 0.5, ymin = pmin(prop,.5)), fill = "lightblue", alpha = 0.75) +
+  geom_ribbon(aes(ymax = pmax(prop,.5), ymin = 0.5), fill = "red", alpha = 0.75) +
+  geom_point(data = shots %>% filter(team == "New York Red Bulls") %>% mutate(minute3 = floor(minute/3)*3), 
+             aes(x = minute3, y = .75), size = 3, color = "red", alpha = 0.75) +
+  geom_point(data = shots %>% filter(team == "Opposition") %>% mutate(minute3 = floor(minute/3)*3), 
+             aes(x = minute3, y = .1), size = 3, color = "lightblue", alpha = 0.75) +
+  labs(x = "Minute", y = "Possession Tilt",
+       title = "NYCFC consisitently saw more of the ball throughout the match but didn't create many shooting opportunities with their spells of possession.",
+       subtitle = "Possession Tilt is the proportion of time in possession for NYRB compared to \nsum of time in possession for Both Teams for every 3 minute interval. (Dots are shots).")
+  
+# obv_net tilt
+obv_net_tilt <- match_focused %>%
+  mutate(minute5 = floor(minute/5)*5) %>%
+  group_by(minute5, team) %>%
+  summarise(obv_for_net_3 = sum(obv_for_net, na.rm = T)) %>%
+  group_by(minute5) %>%
+  mutate(prop = obv_for_net_3/sum(obv_for_net_3, na.rm = T)) %>%
+  filter(team == "New York Red Bulls")
+ggplot(obv_net_tilt, aes(x = minute5, y = prop)) +
+  geom_ribbon(aes(ymax = 0, ymin = pmin(prop,0)), fill = "lightblue", alpha = 0.75) +
+  geom_ribbon(aes(ymax = pmax(prop,0), ymin = 0), fill = "red", alpha = 0.75) +
+  geom_emoji(data = shots %>% filter(shot_outcome_name == "Goal") %>% mutate(minute5 = floor(minute/5)*5), 
+             aes(x = minute5, y = 3), emoji="26bd", size = .03) +
+  labs(x = "Minute", y = "Net On Ball Value Tilt",
+       title = "NYRB had a dominating period before half time making substainally more net positive plays than NYCFC.",
+       subtitle = "Net on Ball Value Tilt is the proportion of net on ball value for NYRB compared to \nsum of net on ball value for Both Teams for every 5 minute interval.")
+
+
+
+```
+
+
+
+
+# Where Shots came from for Red Bull
+
+```{r}
+shots %>%
+  filter(team == "New York Red Bulls") %>%
+  ggplot(aes(x = location_x, y = location_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_point() +
+  geom_segment(
+    aes(
+      x = location_x, y = location_y, xend = shot_end_location_x, yend = shot_end_location_y,
+      color = shot_outcome_name
+    ),
+    arrow = arrow(length = unit(0.1, "cm"))
+  )
+
+match_focused %>%
+  filter(!is.na(shot_statsbomb_xg)) %>%
+  group_by(team) %>%
+  summarise(
+    total_xG = sum(shot_statsbomb_xg),
+    average_xG = mean(shot_statsbomb_xg)
+  )
+```
+
+```{r}
+match_focused %>%
+  mutate(total_duration = sum(duration)) %>%
+  group_by(team) %>%
+  mutate(
+    team_duration = sum(duration),
+    game_possession = team_duration / total_duration * 100
+  ) %>%
+  distinct(team, game_possession)
+
+passes %>%
+  group_by(team, possession) %>%
+  summarise(pass_count = n()) %>%
+  ggplot(aes(x = team, y = pass_count)) +
+  geom_boxplot()
+```
+
+```{r}
+# Graph the median pass reception position of each player
+positions_plot <- passes %>% filter(team == "New York Red Bulls" & minute < 67) %>%
+  filter(is.na(pass_outcome_name)) %>%
+  group_by(db_player_pass_recipient_id) %>%
+  summarise(
+    mean_x = mean(pass_end_location_x),
+    mean_y = mean(pass_end_location_y)
+  ) 
+ggplot(positions_plot, aes(x = mean_x, y = mean_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_point(color = "red", size = 5)
+
+
+
+player_pass_network <- passes %>% filter(team == "New York Red Bulls" & minute < 67) %>%
+  filter(is.na(pass_outcome_name)) %>%
+  group_by(db_player_id, db_player_pass_recipient_id) %>%
+  mutate(count_between_players = n()) %>%
+  group_by(db_player_pass_recipient_id) %>%
+  mutate(
+    mean_reception_x = mean(pass_end_location_x),
+    mean_reception_y = mean(pass_end_location_y)
+  ) %>%
+  group_by(db_player_id) %>%
+  mutate(mean_pass_location_x = mean(pass_end_location_x),
+         mean_pass_location_y = mean(pass_end_location_y)) %>%
+  distinct(db_player_id, db_player_pass_recipient_id, mean_reception_x, mean_reception_y, mean_pass_location_x, mean_pass_location_y, count_between_players, .keep_all = TRUE) 
+
+# plot the mean pass reception position of each player and draw a line connecting each play sizing it by number of passes between players
+player_pass_network %>%
+  ggplot(aes(x = mean_reception_x, y = mean_reception_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_segment(
+    aes(
+      xend = mean_pass_location_x, yend = mean_pass_location_y, x = mean_reception_x, y = mean_reception_y,
+    lwd = count_between_players, alpha = 0.5),
+    arrow = arrow(length = unit(0.1, "cm"))
+  ) +
+  geom_point(aes(x = mean_pass_location_x, y = mean_pass_location_y), color = "darkblue", size = 5) +
+  geom_point(color = "red", size = 2) +
+  facet_wrap(~sb_position, ncol = 3)
+  
+ggplot(player_pass_network, aes(x = mean_reception_x, y = mean_reception_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_segment(
+    aes(
+      xend = mean_pass_location_x, yend = mean_pass_location_y, x = mean_reception_x, y = mean_reception_y,
+    lwd = count_between_players, alpha = 0.5),
+    arrow = arrow(length = unit(0.1, "cm"))
+  ) +
+  geom_point(aes(x = mean_pass_location_x, y = mean_pass_location_y), color = "darkblue", size = 5) +
+  geom_point(color = "red", size = 2) +
+  facet_wrap(~db_player_id, ncol = 3)
+  
+
+```
+
+```{r}
+
+passes %>% filter(team == "New York Red Bulls" & minute < 68) %>% 
+  group_by(db_player_id) %>%
+  summarise(mean_location_x = mean(location_x),
+            mean_location_y = mean(location_y),
+            mean_pass_length = mean(pass_length),
+            mean_pass_angle = mean(pass_angle),
+            count = n()
+            )  %>%
+  ggplot(aes(x = mean_location_x, y = mean_location_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_point(color = "red", size = 5) +
+  geom_segment(
+    aes(x = mean_location_x, y = mean_location_y,
+        xend = mean_location_x + mean_pass_length * cos(mean_pass_angle),
+        yend = mean_location_y + mean_pass_length * sin(mean_pass_angle)
+        ),
+    arrow = arrow(length = unit(0.1, "cm"))
+  )
+
+passes %>% filter(team == "New York Red Bulls" & minute < 68) %>%
+  ggplot(aes(x = location_x, y = location_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_segment(
+    aes(x = location_x, y = location_y,
+        xend = location_x + pass_length * cos(pass_angle),
+        yend = location_y + pass_length * sin(pass_angle)
+        ),
+    arrow = arrow(length = unit(0.1, "cm"))
+  ) +
+  facet_wrap(~sb_position, ncol = 3)
+
+passes %>% filter(team == "Opposition" & minute < 45) %>% 
+  group_by(db_player_id) %>%
+  summarise(mean_location_x = mean(location_x),
+            mean_location_y = mean(location_y),
+            mean_pass_length = mean(pass_length),
+            mean_pass_angle = mean(pass_angle),
+            count = n()
+            )  %>%
+  ggplot(aes(x = mean_location_x, y = mean_location_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_point(color = "red", size = 5) +
+  geom_segment(
+    aes(x = mean_location_x, y = mean_location_y,
+        xend = mean_location_x + mean_pass_length * cos(mean_pass_angle),
+        yend = mean_location_y + mean_pass_length * sin(mean_pass_angle)
+        ),
+    arrow = arrow(length = unit(0.1, "cm"))
+  )
+
+passes %>% filter(team == "Opposition" & minute < 45) %>%
+  ggplot(aes(x = location_x, y = location_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_segment(
+    aes(x = location_x, y = location_y,
+        xend = location_x + pass_length * cos(pass_angle),
+        yend = location_y + pass_length * sin(pass_angle)
+        ),
+    arrow = arrow(length = unit(0.1, "cm"))
+  ) +
+  facet_wrap(~sb_position, ncol = 3)
+
+# Calculate the proportions of passes that go in a positive direction on the x-axis
+passes %>% 
+  mutate(pass_direction = ifelse(pass_angle < 0, "negative", "positive")) %>%
+  group_by(team) %>%
+  summarise(prop_positive = sum(pass_direction == "positive") / n())
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+shooting <- read_csv("shooting.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+passing <- read_csv("passing.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+passing_types <- read_csv("passing_types.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+possession <- read_csv("possession.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+defensive_actions <- read_csv("defense.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+goal_shot_creation <- read_csv("gca.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+miscellaneous <- read_csv("misc.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+```
+
+
+```{r}
+map_club <- function(df) {
+  df %>%
+    mutate(Club = case_when(
+      Club == "Houston-Dynamo" ~ "Dynamo FC",
+      Club == "New-York-Red-Bulls" ~ "NY Red Bulls",
+      Club == "New-York-City-FC" ~ "NYCFC",
+      Club == "New-England-Revolution" ~ "New England",
+      Club == "Philadelphia-Union" ~ "Philadelphia",
+      Club == "Toronto-FC" ~ "Toronto FC",
+      Club == "Chicago-Fire" ~ "Chicago Fire",
+      Club == "Columbus-Crew" ~ "Columbus Crew",
+      Club == "FC-Cincinnati" ~ "FC Cincinnati",
+      Club == "Atlanta-United" ~ "Atlanta Utd",
+      Club == "Nashville-SC" ~ "Nashville",
+      Club == "Orlando-City" ~ "Orlando City",
+      Club == "Inter-Miami" ~ "Inter Miami",
+      Club == "DC-United" ~ "D.C. United",
+      Club == "CF-Montreal" ~ "CF Montréal",
+      Club == "FC-Dallas" ~ "FC Dallas",
+      Club == "Sporting-Kansas-City" ~ "Sporting KC",
+      Club == "Minnesota-United" ~ "Minnesota Utd",
+      Club == "Colorado-Rapids" ~ "Colorado Rapids",
+      Club == "Real-Salt-Lake" ~ "Real Salt Lake",
+      Club == "LA-Galaxy" ~ "LA Galaxy",
+      Club == "Los-Angeles-FC" ~ "Los Angeles FC",
+      Club == "San-Jose-Earthquakes" ~ "San Jose",
+      Club == "Portland-Timbers" ~ "Portland Timbers",
+      Club == "Seattle-Sounders" ~ "Seattle",
+      Club == "Vancouver-Whitecaps" ~ "Vancouver",
+      Club == "Austin-FC" ~ "Austin",
+      Club == "St-Louis-City" ~ "St. Louis",
+      Club == "Charlotte-FC" ~ "Charlotte",
+      TRUE ~ Club
+    )) %>%
+    mutate(Opponent = case_when(
+      Opponent == "Nashville SC" ~ "Nashville",
+      Opponent == "New England Revolution" ~ "New England",
+      Opponent == "Dynamo" ~ "Dynamo FC",
+      Opponent == "Montreal Impact" ~ "CF Montréal",
+      TRUE ~ Opponent
+    ))
+}
+
+shooting <- map_club(shooting)
+passing <- map_club(passing)
+passing_types <- map_club(passing_types)
+possession <- map_club(possession)
+defensive_actions <- map_club(defensive_actions)
+goal_shot_creation <- map_club(goal_shot_creation)
+miscellaneous <- map_club(miscellaneous)
+
+opp_shooting <- shooting %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(shooting)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+shooting <- right_join(shooting, opp_shooting, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_passing <- passing %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(passing)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+passing <- right_join(passing, opp_passing, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_passing_types <- passing_types %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(passing_types)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+passing_types <- right_join(passing_types, opp_passing_types, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_possession <- possession %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(possession)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+possession <- right_join(possession, opp_possession, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_defensive_actions <- defensive_actions %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(defensive_actions)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+defensive_actions <- right_join(defensive_actions, opp_defensive_actions, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_goal_shot_creation <- goal_shot_creation %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(goal_shot_creation)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+goal_shot_creation <- right_join(goal_shot_creation, opp_goal_shot_creation, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_miscellaneous <- miscellaneous %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(miscellaneous)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+miscellaneous <- right_join(miscellaneous, opp_miscellaneous, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+```
+
+```{r}
+MLS_all <- left_join(shooting, passing, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(passing_types, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(possession, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(defensive_actions, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(goal_shot_creation, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(miscellaneous, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  mutate(Week = "nothing") %>%
+  distinct(Year, Club, Opponent, Time, Round, Day, Venue, Result, GF, GA, .keep_all = TRUE) %>%
+  select(-GameId.x, -GameId.y, -GameId.x.x, -GameId.y.y, -GameId.x.x.x, -GameId.y.y.y, -GameId) %>%
+  filter(Round == "Regular Season")
+```
+
+
+
+```{r}
+BD_shooting <- read_csv("BD_shooting.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+BD_passing <- read_csv("BD_passing.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+BD_passing_types <- read_csv("BD_passing_types.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+BD_possession <- read_csv("BD_possession.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+BD_defensive_actions <- read_csv("BD_defense.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+BD_goal_shot_creation <- read_csv("BD_gca.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+BD_miscellaneous <- read_csv("BD_misc.csv") %>%
+  filter(Round == "Bundesliga") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+```
+
+```{r}
+BD_shooting <- BD_shooting %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+BD_passing <- BD_passing %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+BD_passing_types <- BD_passing_types %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+BD_possession <- BD_possession %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+BD_defensive_actions <- BD_defensive_actions %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+BD_goal_shot_creation <- BD_goal_shot_creation %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+BD_miscellaneous <- BD_miscellaneous %>%
+  mutate(Club = case_when(
+    Club == "Bayern-Munich" ~ "Bayern Munich",
+    Club == "RB-Leipzig" ~ "RB Leipzig",
+    Club == "Bayer-Leverkusen" ~ "Leverkusen",
+    Club == "Monchengladbach" ~ "M'gladbach",
+    Club == "Eintracht-Frankfurt" ~ "Eint Frankfurt",
+    Club == "Union-Berlin" ~ "Union Berlin",
+    Club == "Werder-Bremen" ~ "Werder Bremen",
+    Club == "Hertha-BSC" ~ "Hertha BSC",
+    Club == "Mainz-05" ~ "Mainz 05",
+    Club == "Schalke-04" ~ "Schalke 04",
+    Club == "Greuther-Furth" ~ "Greuther Furth",
+    Club == "Paderborn-07" ~ "Paderborn 07",
+    Club == "Hannover-96" ~ "Hannover 96",
+    Club == "Hamburger-SV" ~ "Hamburger SV",
+    TRUE ~ Club
+  )) %>%
+  mutate(Opponent = case_when(
+    Opponent == "Nürnberg" ~ "Nurnberg",
+    Opponent == "Düsseldorf" ~ "Dusseldorf",
+    Opponent == "Köln" ~ "Koln",
+    TRUE ~ Opponent
+  ))
+
+BD_Opp_Shooting <- BD_shooting %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_shooting)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_shooting <- right_join(BD_shooting, BD_Opp_Shooting, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+
+BD_Opp_Passing <- BD_passing %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_passing)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_passing <- right_join(BD_passing, BD_Opp_Passing, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+
+BD_Opp_Passing_Types <- BD_passing_types %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_passing_types)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_passing_types <- right_join(BD_passing_types, BD_Opp_Passing_Types, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+
+BD_Opp_Possession <- BD_possession %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_possession)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_possession <- right_join(BD_possession, BD_Opp_Possession, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+
+BD_Opp_Defensive_Actions <- BD_defensive_actions %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_defensive_actions)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_defensive_actions <- right_join(BD_defensive_actions, BD_Opp_Defensive_Actions, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+
+BD_Opp_Goal_Shot_Creation <- BD_goal_shot_creation %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_goal_shot_creation)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_goal_shot_creation <- right_join(BD_goal_shot_creation, BD_Opp_Goal_Shot_Creation, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+
+BD_Opp_Miscellaneous <- BD_miscellaneous %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(BD_miscellaneous)) %>%
+  select(-Venue, -Result, -GF, -GA) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+BD_miscellaneous <- right_join(BD_miscellaneous, BD_Opp_Miscellaneous, by = c("Year", "Club", "Opponent", "Time", "Round", "Week", "Day"))
+```
+
+```{r}
+BD_all <- left_join(BD_shooting, BD_passing, by = c("Year", "Club", "Time", "Round", "Week", "Day", "Venue", "Result", "GF", "GA", "Opponent")) %>%
+  left_join(BD_passing_types, by = c("Year", "Club", "Time", "Round", "Week", "Day", "Venue", "Result", "GF", "GA", "Opponent")) %>%
+  left_join(BD_possession, by = c("Year", "Club", "Time", "Round", "Week", "Day", "Venue", "Result", "GF", "GA", "Opponent")) %>%
+  left_join(BD_defensive_actions, by = c("Year", "Club", "Time", "Round", "Week", "Day", "Venue", "Result", "GF", "GA", "Opponent")) %>%
+  left_join(BD_goal_shot_creation, by = c("Year", "Club", "Time", "Round", "Week", "Day", "Venue", "Result", "GF", "GA", "Opponent")) %>%
+  left_join(BD_miscellaneous, by = c("Year", "Club", "Time", "Round", "Week", "Day", "Venue", "Result", "GF", "GA", "Opponent"))
+```
+
+```{r}
+all_df <- rbind(MLS_all %>% mutate(League = "MLS"), BD_all %>% mutate(League = "Bundesliga")) %>% na.omit()
+```
+
+# Mean Adjust the Bundesliga Stats to MLS scale
+
+```{r}
+adjustment <- all_df %>%
+  select(-Week) %>%
+  group_by(Year, League) %>%
+  summarise(across(c(12:ncol(.) - 2), mean)) %>%
+  arrange(Year) %>%
+  group_by(Year) %>%
+  reframe(across(c(3:ncol(.) - 1), ~ . - lag(.)), ) %>%
+  rename_with(~ paste0("Adj_", .x), 2:ncol(.)) %>%
+  ungroup() %>%
+  na.omit()
+```
+
+```{r}
+Adjusted_Bundesliga <- all_df %>%
+  left_join(adjustment, by = c("Year")) %>%
+  mutate(across(
+    c(12:ncol(all_df) - 2, -League, -Opponent),
+    ~ ifelse(League == "Bundesliga", . + get(paste0("Adj_", cur_column())), .)
+  ))
+```
+
+```{r}
+full_match_logs <- Adjusted_Bundesliga %>%
+  select(everything(), -colnames(adjustment), Year) %>%
+  select(-contains(".y")) %>%
+  rename_with(~ str_remove(., ".x"), contains(".x")) %>%
+  mutate(
+    Progressive_Pass_pct = PrgP / Total_Att * 100,
+    Opponent_Progressive_Pass_pct = Opponent_PrgP / Opponent_Total_Att * 100,
+    Long_Pass_prop = Long_Att / Total_Att,
+    Med_pass_prop = Med_Att / Total_Att,
+    Short_Pass_prop = Short_Att / Total_Att,
+    Opponent_Long_Pass_prop = Opponent_Long_Att / Opponent_Total_Att,
+    Opponent_Med_pass_prop = Opponent_Med_Att / Opponent_Total_Att,
+    Opponent_Short_Pass_prop = Opponent_Short_Att / Opponent_Total_Att,
+    Adj_cmp_pct = Cmp_pct * Total_Att,
+    Opponent_Adj_cmp_pct = Opponent_Cmp_pct * Opponent_Total_Att,
+    Adj_Long_Pass_cmp_pct = Long_Cmp_pct * Long_Att,
+    Adj_Med_pass_cmp_pct = Med_Cmp_pct * Med_Att,
+    Adj_Short_Pass_cmp_pct = Short_Cmp_pct * Short_Att,
+    Total_Touches_Att3rd = Touches_Att3rd + Opponent_Touches_Att3rd,
+    Field_Tilt = Touches_Att3rd / Total_Touches_Att3rd * 100,
+    Opponent_Field_Tilt = Opponent_Touches_Att3rd / Total_Touches_Att3rd * 100,
+    Sh_per_pass = Sh / Total_Att,
+    Opponent_Sh_per_pass = Opponent_Sh / Opponent_Total_Att,
+    Sh_per_touch = Sh / Touches,
+    Opponent_Sh_per_touch = Opponent_Sh / Opponent_Touches,
+    xG_per_pass = xG / Total_Att,
+    Opponent_xG_per_pass = Opponent_xG / Opponent_Total_Att,
+    xG_per_touch = xG / Touches,
+    Opponent_xG_per_touch = Opponent_xG / Opponent_Touches,
+    Sh_per_poss = Sh / Poss,
+    Opponent_Sh_per_poss = Opponent_Sh / Opponent_Poss,
+    xG_per_poss = xG / Poss,
+    Opponent_xG_per_poss = Opponent_xG / Opponent_Poss,
+    Touch_Att3rd_prop = Touches_Att3rd / Touches,
+    Touch_Mid3rd_prop = Touches_Mid3rd / Touches,
+    Touch_Def3rd_prop = Touches_Def3rd / Touches,
+    Opponent_Touch_Att3rd_prop = Opponent_Touches_Att3rd / Opponent_Touches,
+    Opponent_Touch_Mid3rd_prop = Opponent_Touches_Mid3rd / Opponent_Touches,
+    Opponent_Touch_Def3rd_prop = Opponent_Touches_Def3rd / Opponent_Touches
+  ) %>%
+  select(-c(CKIn, CKOut, Str, Cmp, Att, Live, Opponent_Aerial_Won, Opponent_Aerial_Lost))
+```
+
+
+# Tackles made in attacking 3rd vs opponent completion % (by year)
+
+```{r}
+TklsA3_OCP <- full_match_logs %>%
+  group_by(Club, Year) %>%
+  summarise(
+    `Tackles Made in Attacking 3rd` = mean(Tkl_Att_3rd),
+    `Opponent Completion %` = mean(Opponent_Cmp_pct)
+  )
+ggplot(TklsA3_OCP, aes(x = `Tackles Made in Attacking 3rd`, y = `Opponent Completion %`)) +
+  geom_point(alpha = 0.25, size = 5) +
+  geom_point(data = TklsA3_OCP %>% filter(Club == "NY Red Bulls"), color = "Red", size = 5) +
+  geom_point(data = TklsA3_OCP %>% filter(Club == "RB Leipzig"), color = "darkBlue", size = 5) +
+  geom_label_repel(data = TklsA3_OCP %>% filter(Club == "NY Red Bulls"), aes(label = Year), size = 5, color = "red") +
+  geom_label_repel(data = TklsA3_OCP %>% filter(Club == "RB Leipzig"), aes(label = Year), size = 5, color = "darkblue")
+```
+
+# Tackles attempted vs opponent progressive passes (by year)
+
+```{r}
+TklsAtt_OPP <- full_match_logs %>%
+  group_by(Club, Year) %>%
+  summarise(
+    `Tackles Attempted + Interceptions` = mean(`Tkl+Int` + Blocks_Pass),
+    `Opponent Progressive Pass %` = mean(Opponent_PrgP / Opponent_Total_Att * 100)
+  )
+
+ggplot(TklsAtt_OPP, aes(x = `Tackles Attempted + Interceptions`, y = `Opponent Progressive Pass %`)) +
+  geom_point(alpha = 0.25, size = 5) +
+  geom_point(data = TklsAtt_OPP %>% filter(Club == "NY Red Bulls"), color = "Red", size = 5) +
+  geom_point(data = TklsAtt_OPP %>% filter(Club == "RB Leipzig"), color = "Blue", size = 5) +
+  geom_label_repel(data = TklsAtt_OPP %>% filter(Club == "NY Red Bulls"), aes(label = Year), size = 5, color = "red") +
+  geom_label_repel(data = TklsAtt_OPP %>% filter(Club == "RB Leipzig"), aes(label = Year), size = 5, color = "blue")
+```
+
+# Tackles Attempted + Interceptions vs opponent pct of Long pass attempts (by year)
+
+```{r}
+TklsAtt_OPP <- full_match_logs %>%
+  group_by(Club, Year, League) %>%
+  summarise(
+    `Tackles Attempted + Interceptions` = mean(`Tkl+Int` + Blocks_Pass),
+    `Opponent Long Pass %` = mean(Opponent_Long_Att / Opponent_Total_Att * 100)
+  )
+library(plotly)
+
+original_plot <- ggplot(TklsAtt_OPP, aes(x = `Tackles Attempted + Interceptions`, y = `Opponent Long Pass %`)) +
+  geom_point(aes(text = paste(
+    "Year: ", Year, "\nClub: ", Club,
+    "\nTackles Attempted + Interceptions: ", round(`Tackles Attempted + Interceptions`, 2),
+    "\nOpponent Long Pass %: ", round(`Opponent Long Pass %`, 2)
+  )), alpha = 0.25, size = 5) +
+  geom_point(
+    data = TklsAtt_OPP %>% filter(Club == "NY Red Bulls"),
+    aes(text = paste(
+      "Year: ", Year, "\nClub: ", Club,
+      "\nTackles Attempted + Interceptions: ", round(`Tackles Attempted + Interceptions`, 2),
+      "\nOpponent Long Pass %: ", round(`Opponent Long Pass %`, 2)
+    )),
+    color = "Red", size = 5
+  ) +
+  geom_rect(
+    data = TklsAtt_OPP %>% filter(Club == "NY Red Bulls"),
+    aes(
+      xmin = `Tackles Attempted + Interceptions` - 0.4, xmax = `Tackles Attempted + Interceptions` + 0.4,
+      ymin = `Opponent Long Pass %` + 0.2, ymax = `Opponent Long Pass %` + 0.5
+    ),
+    fill = "red", alpha = 0.75
+  ) +
+  geom_text(data = TklsAtt_OPP %>% filter(Club == "NY Red Bulls"), aes(label = Year), nudge_x = 0, nudge_y = 0.3, size = 5) +
+  geom_segment(
+    data = TklsAtt_OPP %>% filter(Club == "NY Red Bulls"),
+    aes(
+      x = `Tackles Attempted + Interceptions`, y = `Opponent Long Pass %`,
+      xend = `Tackles Attempted + Interceptions`, yend = `Opponent Long Pass %` + 0.2
+    ),
+    color = "red"
+  )
+
+ggplotly(original_plot, tooltip = c("text"))
+```
+
+
+# Recoveries made vs opponent Long Completion % (by year)
+
+```{r}
+Rec_OPP <- full_match_logs %>%
+  group_by(Club, Year) %>%
+  summarise(
+    `Recoveries` = mean(Recov),
+    `Opponent Long Completion %` = mean(Opponent_Long_Cmp_pct)
+  )
+
+ggplot(Rec_OPP, aes(x = `Recoveries`, y = `Opponent Long Completion %`)) +
+  geom_point(alpha = 0.25, size = 5) +
+  geom_point(data = Rec_OPP %>% filter(Club == "NY Red Bulls"), color = "Red", size = 5) +
+  geom_point(data = Rec_OPP %>% filter(Club == "RB Leipzig"), color = "Blue", size = 5) +
+  geom_label_repel(data = Rec_OPP %>% filter(Club == "NY Red Bulls"), aes(label = Year), size = 5)
+```
+
+# Calculate Field Tilt
+
+```{r}
+Field_Tilt <- full_match_logs %>%
+  mutate(
+    Total_Touches_Att3rd = Touches_Att3rd + Opponent_Touches_Att3rd,
+    Field_Tilt = Touches_Att3rd / Total_Touches_Att3rd * 100,
+    Opponent_Field_Tilt = Opponent_Touches_Att3rd / Total_Touches_Att3rd * 100
+  ) %>%
+  group_by(Club, Year, League) %>%
+  summarise(
+    `Field Tilt` = mean(Field_Tilt),
+    `Opponent Field Tilt` = mean(Opponent_Field_Tilt),
+    Difference = `Field Tilt` - `Opponent Field Tilt`
+  ) %>%
+  arrange(desc(Difference))
+```
+
+```{r}
+ggplot() +
+  annotate_pitch() +
+  geom_rect(
+    data = Field_Tilt %>% filter(Club == "NY Red Bulls"),
+    aes(xmin = 0, xmax = `Field Tilt`, ymin = 0, ymax = 100), fill = "red", alpha = 0.75
+  ) +
+  geom_rect(
+    data = Field_Tilt %>% filter(Club != "NY Red Bulls" & League == "MLS") %>% group_by(Year, Club) %>%
+      summarise(mean_Field_Tilt = mean(`Field Tilt`)) %>% group_by(Year) %>%
+      summarise(club_mean_Field_Tilt = mean(mean_Field_Tilt)),
+    aes(xmin = 0, xmax = club_mean_Field_Tilt, ymin = 0, ymax = 100), fill = "blue", alpha = .75
+  ) +
+  geom_vline(
+    data = Field_Tilt %>% filter(League == "MLS") %>% group_by(Year, Club) %>%
+      summarise(mean_Field_Tilt = mean(`Field Tilt`)) %>% group_by(Year) %>%
+      summarise(max_Field_Tilt = max(mean_Field_Tilt)),
+    aes(xintercept = max_Field_Tilt), linewidth = 2
+  ) +
+  facet_wrap(~Year)
+```
+
+
+# Modeling each game win probability for in game stats (not including information about goals)
+# So how likely were teams to win a game based on how they played in the game
+# -1 for Loss, 0 for Draw, 1 for Win
+
+```{r}
+library(randomForest)
+
+set.seed(123)
+
+modeling_df <- full_match_logs %>%
+  select(Result, Venue, c(12:ncol(.) - 1), -Opponent_Gls) %>%
+  mutate(Result = case_when(
+    Result == "W" ~ 1,
+    Result == "D" ~ 0,
+    Result == "L" ~ -1
+  )) %>%
+  # Rename columns with a '/' in it to 'per'
+  rename_with(~ str_replace(., "/", "per"), contains("/")) %>%
+  rename_with(~ str_replace(., "-", "minus"), contains("-")) %>%
+  rename_with(~ str_replace(., "\\+", "plus"), contains("+")) %>%
+  rename(
+    Final_3rd_Passes = `1per3`,
+    Second_yellow = `2CrdY`
+  ) %>%
+  select(-c(
+    GperSh, GperSoT, GminusxG, npGminusxG, Ast, GCA:GCA_Def,
+    Opponent_GperSh, Opponent_GperSoT, Opponent_GminusxG, Opponent_npGminusxG, Opponent_Ast, Opponent_GCA:Opponent_GCA_Def
+  ))
+
+# Create a random forest model
+rf_model <- randomForest(Result ~ ., data = modeling_df, importance = TRUE, ntree = 50)
+
+predicted_probabilities <- predict(rf_model, modeling_df, type = "response")
+
+match_probabilities <- full_match_logs %>%
+  mutate(predicted_probability = predicted_probabilities) %>%
+  select(Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent, predicted_probability)
+
+
+
+varImpPlot(rf_model)
+
+# Assuming 'Result' is a factor variable with levels -1, 0, and 1
+actual_results <- modeling_df$Result
+predicted_results <- round(predicted_probabilities)
+
+# Convert predicted results to the same levels as actual results
+predicted_results <- as.factor(predicted_results)
+levels(predicted_results) <- levels(actual_results)
+
+# Create confusion matrix
+conf_matrix <- table(actual_results, predicted_results)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+cat("Accuracy:", accuracy, "\n")
+
+
+# Histogram of predicted probabilities
+ggplot(match_probabilities, aes(x = (predicted_probability)^3)) +
+  geom_histogram(binwidth = 0.05, color = "white") +
+  labs(x = "Predicted Probability of Win", y = "Count")
+```
+
+# Calculate the percentile for each mean stat grouped by year and club
+
+```{r}
+percentiles <- full_match_logs %>%
+  group_by(Club, Year) %>%
+  # Mean for each club in each year
+  summarise(across(c(11:ncol(.) - 2, -League), ~ mean(.))) %>%
+  ungroup() %>%
+  # Normalized value based on mean for each club in each year
+  summarise(Club, across(c(3:ncol(.), -Club), ~ (. - min(.)) / (max(.) - min(.)))) %>%
+  group_by(Club) %>%
+  # Mean for said normalized value
+  summarise(across(c(2:ncol(.) - 1), ~ mean(.))) %>%
+  ungroup() %>%
+  # Percentile for mean of normalized value
+  summarise(Club, across(c(2:ncol(.), -Club), ~ . / max(.))) %>%
+  pivot_longer(cols = c(2:ncol(.)), names_to = "stat", values_to = "percentile")
+
+rbny_percentiles <- percentiles %>%
+  filter(Club == "NY Red Bulls") %>%
+  arrange(desc(percentile))
+
+
+
+
+
+# write rbny_percentiles into an html data table
+library(DT)
+
+datatable(rbny_percentiles %>% mutate(percentile = scales::percent(percentile, accuracy = 1)),
+  options = list(
+    paging = TRUE,
+    searching = TRUE,
+    lengthMenu = c(10, 25, 50, 100),
+    pageLength = 10
+  )
+)
+
+
+
+normalized <- full_match_logs %>%
+  select(Year, everything()) %>%
+  # Normalized value for each match
+  summarise(
+    Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent,
+    across(c(12:ncol(.) - 1, -League, -Week), ~ (. - min(.)) / (max(.) - min(.)))
+  ) %>%
+  pivot_longer(cols = c(11:ncol(.)), names_to = "stat", values_to = "normalized")
+
+RB_SOP_rating <- left_join(normalized, rbny_percentiles %>% select(-Club) %>% rename(RBNY_percentile = percentile),
+  by = "stat"
+) %>%
+  mutate(RB_SOP_rating = normalized * RBNY_percentile) %>%
+  group_by(Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent) %>%
+  summarise(RB_SOP_rating = mean(RB_SOP_rating)) %>%
+  ungroup() %>%
+  summarise(Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent,
+    RB_SOP_rating = (RB_SOP_rating - min(RB_SOP_rating)) / (max(RB_SOP_rating) - min(RB_SOP_rating))
+  )
+
+ggplot(RB_SOP_rating %>% filter(Club != "NY Red Bulls"), aes(x = RB_SOP_rating)) +
+  geom_histogram(stat = "density", color = "lightblue") +
+  geom_histogram(data = RB_SOP_rating %>% filter(Club == "NY Red Bulls"), aes(x = RB_SOP_rating), stat = "density", fill = "red", alpha = .5) +
+  facet_wrap(~Year) +
+  labs(x = "RBSOP Rating", title = "Marginal Distribution of RBSOP", subtitle = "Comparing NYRB (red) vs Rest of League (blue)")
+```
+
+
+```{r}
+SOP_MP <- left_join(RB_SOP_rating, match_probabilities) %>%
+  group_by(Club, Year) %>%
+  mutate(predicted_probability = predicted_probability) %>%
+  summarise(across(c(RB_SOP_rating, predicted_probability), ~ mean(.))) %>%
+  ungroup()
+ggplot(SOP_MP, aes(x = RB_SOP_rating, y = predicted_probability)) +
+  geom_point(alpha = 0.25, size = 2) +
+  geom_point(data = SOP_MP %>% filter(Club == "NY Red Bulls"), color = "red", size = 5) +
+  geom_label_repel(data = SOP_MP %>% filter(Club == "NY Red Bulls"), aes(label = Year), color = "red", size = 5)
+facet_wrap(~Year)
+geom_point(data = SOP_MP %>% filter(Club == "RB Leipzig"), aes(x = RB_SOP_rating, y = predicted_probability), color = "blue", size = 5) +
+  geom_label_repel(data = SOP_MP %>% filter(Club == "RB Leipzig"), aes(x = RB_SOP_rating, y = predicted_probability, label = Year), color = "blue", size = 5)
+
+SOP_MP_m <- left_join(RB_SOP_rating, match_probabilities)
+ggplot(SOP_MP_m, aes(x = RB_SOP_rating, y = predicted_probability)) +
+  geom_point(alpha = 0.25) +
+  geom_point(data = SOP_MP_m %>% filter(Club == "NY Red Bulls"), color = "red", alpha = 0.25) +
+  facet_wrap(~Club)
+geom_label_repel(data = SOP_MP_m %>% filter(Club == "NY Red Bulls"), aes(label = Year), color = "red", size = 5)
+geom_point(data = SOP_MP_m %>% filter(Club == "RB Leipzig"), aes(x = RB_SOP_rating, y = predicted_probability), color = "blue", size = 5) +
+  geom_label_repel(data = SOP_MP_m %>% filter(Club == "RB Leipzig"), aes(x = RB_SOP_rating, y = predicted_probability, label = Year), color = "blue", size = 5)
+```
+
+
+```{r}
+ggplot(SOP_MP_m %>% filter(Club == "NY Red Bulls"), aes(x = RB_SOP_rating, y = predicted_probability)) +
+  geom_point(alpha = 0.25, size = 3, color = "red")
+```
+
+
+
+
+```{r}
+match_full %>%
+  group_by(team) %>%
+  summarise(sum(obv_for_net, na.rm = TRUE))
+
+# sum the number of positive obv_for_net for each team
+match_full %>%
+  group_by(team, db_player_id) %>%
+  summarise(sum(obv_for_net > 0, na.rm = TRUE) / n())
+
+# sum the number of counterpresses by team
+match_full %>%
+  group_by(team) %>%
+  summarise(sum(counterpress, na.rm = TRUE))
+
+match_full %>%
+  group_by(team) %>%
+  summarise(sum(under_pressure, na.rm = TRUE))
+```
+
+
+```{r}
+defensive_actions %>%
+  group_by(Club) %>%
+  summarise(`Tackles made in Attacking 3rd` = mean(Tkl_Att_3rd)) %>%
+  arrange(desc(`Tackles made in Attacking 3rd`))
+
+defensive_actions %>%
+  group_by(Year, Club) %>%
+  summarise(`Tackles made in Attacking 3rd` = mean(Tkl_Att_3rd)) %>%
+  arrange(desc(`Tackles made in Attacking 3rd`))
+
+defensive_actions %>%
+  group_by(Club) %>%
+  summarise(
+    `Tackles made in Attacking 3rd` = mean(Tkl_Att_3rd),
+    `Opponent Tackles made in Attacking 3rd` = mean(Opponent_Tkl_Att_3rd),
+    Difference = `Tackles made in Attacking 3rd` - `Opponent Tackles made in Attacking 3rd`
+  ) %>%
+  arrange(desc(Difference))
+
+defensive_actions %>%
+  group_by(Club, Year) %>%
+  summarise(
+    `Tackles made in Attacking 3rd` = mean(Tkl_Att_3rd),
+    `Opponent Tackles made in Attacking 3rd` = mean(Opponent_Tkl_Att_3rd),
+    Difference = `Tackles made in Attacking 3rd` - `Opponent Tackles made in Attacking 3rd`
+  ) %>%
+  arrange(desc(Difference))
+```

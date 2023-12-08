@@ -1,0 +1,1151 @@
+---
+title: . 
+title-slide-attributes:
+  data-background-image: titleslide.png
+  data-background-size: contain
+    
+format:
+  revealjs:
+     parallax-background-image: background.png
+     parallax-background-size: "2100px 900px"
+     parallax-background-horizontal: 200
+     parallax-background-vertical: 50
+     slide-number: true
+     show-slide-number: print
+editor: visual
+---
+
+## The Red Bull Way {background-color="black" background-image="background.png" background-repeat="repeat"}
+
+```{r echo = FALSE}
+library(tidyverse)
+library(ggrepel)
+theme_set(theme_bw() + theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank()
+))
+library(ggsoccer)
+library(plotly)
+library(emoGG)
+
+# DATA PROCESSING
+
+match_full <- read_csv("match_events_for_test.csv")
+
+match_focused <- match_full %>% select(
+  period, timestamp, minute, second,
+  total_score, game_state,
+  possession, team, goal, possession_db_team_id,
+  db_team_id, db_player_id, sb_position,
+  location_x, location_y, area, pattern, event_type,
+  obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+  shot_statsbomb_xg, shot_statsbomb_xg2, shot_key_pass_id,
+  shot_end_location_x, shot_end_location_y, shot_end_location_z,
+  location_x_gk, location_y_gk, dist_to_goal, dist_to_keeper,
+  angle_to_goal, angle_to_keeper, angle_deviation, avevelocity,
+  shot_outcome_name,
+  pass_length, pass_angle, pass_outcome_name,
+  pass_type_name, pass_height_name, ball_receipt_outcome_name,
+  pass_through_ball, pass_cross, pass_end_location_x, pass_end_location_y,
+  db_player_pass_recipient_id,
+  carry_end_location_x, carry_end_location_y,
+  duel_type_name, duel_outcome_name
+)
+
+shots <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    shot_statsbomb_xg, shot_statsbomb_xg2, shot_key_pass_id,
+    shot_end_location_x, shot_end_location_y, shot_end_location_z,
+    location_x_gk, location_y_gk, dist_to_goal, dist_to_keeper,
+    angle_to_goal, angle_to_keeper, angle_deviation, avevelocity,
+    shot_outcome_name
+  ) %>%
+  filter(event_type == "Shot")
+
+passes <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    pass_length, pass_angle, pass_outcome_name,
+    pass_type_name, pass_height_name, ball_receipt_outcome_name,
+    pass_through_ball, pass_cross, pass_end_location_x, pass_end_location_y,
+    db_player_pass_recipient_id
+  ) %>%
+  filter(event_type == "Pass")
+
+carries <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    carry_end_location_x, carry_end_location_y
+  ) %>%
+  filter(event_type == "Carry")
+
+duels <- match_focused %>%
+  select(
+    period, timestamp, minute, second,
+    total_score, game_state,
+    possession, team, goal, possession_db_team_id,
+    db_team_id, db_player_id, sb_position,
+    location_x, location_y, area, pattern, event_type,
+    obv_for_net, duration, time_in_poss, under_pressure, counterpress,
+    duel_type_name, duel_outcome_name
+  ) %>%
+  filter(event_type %in% c(
+    "Pressure", "Duel", "Dispossessed", "Ball Recovery",
+    "Block", "Miscontrol", "Interception", "Shield"
+  ))
+
+
+# Scraped Data 
+shooting <- read_csv("shooting.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+passing <- read_csv("passing.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+passing_types <- read_csv("passing_types.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+possession <- read_csv("possession.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+defensive_actions <- read_csv("defense.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+goal_shot_creation <- read_csv("gca.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+miscellaneous <- read_csv("misc.csv") %>%
+  na.omit() %>%
+  select(-"Match_Report")
+
+
+map_club <- function(df) {
+  df %>%
+    mutate(Club = case_when(
+      Club == "Houston-Dynamo" ~ "Dynamo FC",
+      Club == "New-York-Red-Bulls" ~ "NY Red Bulls",
+      Club == "New-York-City-FC" ~ "NYCFC",
+      Club == "New-England-Revolution" ~ "New England",
+      Club == "Philadelphia-Union" ~ "Philadelphia",
+      Club == "Toronto-FC" ~ "Toronto FC",
+      Club == "Chicago-Fire" ~ "Chicago Fire",
+      Club == "Columbus-Crew" ~ "Columbus Crew",
+      Club == "FC-Cincinnati" ~ "FC Cincinnati",
+      Club == "Atlanta-United" ~ "Atlanta Utd",
+      Club == "Nashville-SC" ~ "Nashville",
+      Club == "Orlando-City" ~ "Orlando City",
+      Club == "Inter-Miami" ~ "Inter Miami",
+      Club == "DC-United" ~ "D.C. United",
+      Club == "CF-Montreal" ~ "CF Montréal",
+      Club == "FC-Dallas" ~ "FC Dallas",
+      Club == "Sporting-Kansas-City" ~ "Sporting KC",
+      Club == "Minnesota-United" ~ "Minnesota Utd",
+      Club == "Colorado-Rapids" ~ "Colorado Rapids",
+      Club == "Real-Salt-Lake" ~ "Real Salt Lake",
+      Club == "LA-Galaxy" ~ "LA Galaxy",
+      Club == "Los-Angeles-FC" ~ "Los Angeles FC",
+      Club == "San-Jose-Earthquakes" ~ "San Jose",
+      Club == "Portland-Timbers" ~ "Portland Timbers",
+      Club == "Seattle-Sounders" ~ "Seattle",
+      Club == "Vancouver-Whitecaps" ~ "Vancouver",
+      Club == "Austin-FC" ~ "Austin",
+      Club == "St-Louis-City" ~ "St. Louis",
+      Club == "Charlotte-FC" ~ "Charlotte",
+      TRUE ~ Club
+    )) %>%
+    mutate(Opponent = case_when(
+      Opponent == "Nashville SC" ~ "Nashville",
+      Opponent == "New England Revolution" ~ "New England",
+      Opponent == "Dynamo" ~ "Dynamo FC",
+      Opponent == "Montreal Impact" ~ "CF Montréal",
+      TRUE ~ Opponent
+    ))
+}
+
+shooting <- map_club(shooting)
+passing <- map_club(passing)
+passing_types <- map_club(passing_types)
+possession <- map_club(possession)
+defensive_actions <- map_club(defensive_actions)
+goal_shot_creation <- map_club(goal_shot_creation)
+miscellaneous <- map_club(miscellaneous)
+
+opp_shooting <- shooting %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(shooting)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+shooting <- right_join(shooting, opp_shooting, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_passing <- passing %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(passing)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+passing <- right_join(passing, opp_passing, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_passing_types <- passing_types %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(passing_types)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+passing_types <- right_join(passing_types, opp_passing_types, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_possession <- possession %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(possession)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+possession <- right_join(possession, opp_possession, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_defensive_actions <- defensive_actions %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(defensive_actions)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+defensive_actions <- right_join(defensive_actions, opp_defensive_actions, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_goal_shot_creation <- goal_shot_creation %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(goal_shot_creation)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+goal_shot_creation <- right_join(goal_shot_creation, opp_goal_shot_creation, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+opp_miscellaneous <- miscellaneous %>%
+  rename_with(~ paste0("Opponent_", .x), 12:ncol(miscellaneous)) %>%
+  select(-GameId, -Venue, -Result) %>%
+  rename(temp = Club, Club = Opponent) %>%
+  rename(Opponent = temp)
+miscellaneous <- right_join(miscellaneous, opp_miscellaneous, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "GF" = "GA", "GA" = "GF")) %>% na.omit()
+
+MLS_all <- left_join(shooting, passing, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(passing_types, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(possession, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(defensive_actions, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(goal_shot_creation, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  left_join(miscellaneous, by = c("Year", "Club", "Opponent", "Time", "Round", "Day", "Venue", "Result", "GF", "GA")) %>%
+  mutate(Week = "nothing") %>%
+  distinct(Year, Club, Opponent, Time, Round, Day, Venue, Result, GF, GA, .keep_all = TRUE) %>%
+  select(-GameId.x, -GameId.y, -GameId.x.x, -GameId.y.y, -GameId.x.x.x, -GameId.y.y.y, -GameId) %>%
+  filter(Round == "Regular Season")
+
+
+
+full_match_logs <- MLS_all %>%
+  select(everything(), Year) %>%
+  select(-contains(".y")) %>%
+  rename_with(~ str_remove(., ".x"), contains(".x")) %>%
+  mutate(
+    Progressive_Pass_pct = PrgP / Total_Att * 100,
+    Opponent_Progressive_Pass_pct = Opponent_PrgP / Opponent_Total_Att * 100,
+    Long_Pass_prop = Long_Att / Total_Att,
+    Med_pass_prop = Med_Att / Total_Att,
+    Short_Pass_prop = Short_Att / Total_Att,
+    Opponent_Long_Pass_prop = Opponent_Long_Att / Opponent_Total_Att,
+    Opponent_Med_pass_prop = Opponent_Med_Att / Opponent_Total_Att,
+    Opponent_Short_Pass_prop = Opponent_Short_Att / Opponent_Total_Att,
+    Adj_cmp_pct = Cmp_pct * Total_Att,
+    Opponent_Adj_cmp_pct = Opponent_Cmp_pct * Opponent_Total_Att,
+    Adj_Long_Pass_cmp_pct = Long_Cmp_pct * Long_Att,
+    Adj_Med_pass_cmp_pct = Med_Cmp_pct * Med_Att,
+    Adj_Short_Pass_cmp_pct = Short_Cmp_pct * Short_Att,
+    Total_Touches_Att3rd = Touches_Att3rd + Opponent_Touches_Att3rd,
+    Field_Tilt = Touches_Att3rd / Total_Touches_Att3rd * 100,
+    Opponent_Field_Tilt = Opponent_Touches_Att3rd / Total_Touches_Att3rd * 100,
+    Sh_per_pass = Sh / Total_Att,
+    Opponent_Sh_per_pass = Opponent_Sh / Opponent_Total_Att,
+    Sh_per_touch = Sh / Touches,
+    Opponent_Sh_per_touch = Opponent_Sh / Opponent_Touches,
+    xG_per_pass = xG / Total_Att,
+    Opponent_xG_per_pass = Opponent_xG / Opponent_Total_Att,
+    xG_per_touch = xG / Touches,
+    Opponent_xG_per_touch = Opponent_xG / Opponent_Touches,
+    Sh_per_poss = Sh / Poss,
+    Opponent_Sh_per_poss = Opponent_Sh / Opponent_Poss,
+    xG_per_poss = xG / Poss,
+    Opponent_xG_per_poss = Opponent_xG / Opponent_Poss,
+    Touch_Att3rd_prop = Touches_Att3rd / Touches,
+    Touch_Mid3rd_prop = Touches_Mid3rd / Touches,
+    Touch_Def3rd_prop = Touches_Def3rd / Touches,
+    Opponent_Touch_Att3rd_prop = Opponent_Touches_Att3rd / Opponent_Touches,
+    Opponent_Touch_Mid3rd_prop = Opponent_Touches_Mid3rd / Opponent_Touches,
+    Opponent_Touch_Def3rd_prop = Opponent_Touches_Def3rd / Opponent_Touches
+  ) %>%
+  select(-c(CKIn, CKOut, Str, Cmp, Att, Live, Opponent_Aerial_Won, Opponent_Aerial_Lost)) %>%
+  na.omit()
+```
+
+### Agenda
+
+-   About Me.
+
+-   Overview of Red Bull's Philosophy.
+
+-   Data analysis using match log data from [FBREF.com](FBREF.com) to examine and define the unique "Red Bull Style of Play".
+
+-   Analysis of NYRB 7-0 win vs NYCFC.
+
+-   Conclusions.
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+
+# Overview of Red Bull's Philosophy {background-color="black" background-image="background.png" background-repeat="repeat"}
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+
+## [**Overview of Red Bull's Philosophy**]{.underline} {.scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+#### ***Introduction to Red Bull's Distinctive Philosophy***
+
+::: r-fit-text
+-   **Mateschitz's Vision:**
+    -   Embodies more than just an energy boost from the drink.
+    -   Inspires aspirations for an active, performance-oriented, and challenge-driven lifestyle.
+-   **Distinctive Business and Football Management:**
+    -   Red Bull's success attributed to a unique philosophy in both business and football.
+    -   Integration of business and footballing style for a large and impactful empire.
+-   **Alignment with Soccer Philosophy:**
+    -   "Red Bull Gives You Wings" --- an appeal to younger, thrill-seeking consumers.
+    -   "This is an aggressive, proactive kind of football, which is never boring. A perfect fit to the brand!" --- Ralph Rangnick. ![](photos/rbcool.jpeg)
+:::
+
+## [**Overview of Red Bull's Philosophy**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### *Red Bull Football*
+
+::: r-fit-text
+-   **Development of Football and Global Player Network:**
+
+    -   A core goal: development of football through knowledge-sharing within a global network.
+
+    -   Creation of an intricate web of clubs worldwide, forming partnerships to elevate the sport.
+
+    -   By doing so, Red Bull has cultivated a network of players across world football playing in a consistent manner.
+
+-   **Recruitment and Player Development:**
+
+    -   Formation of dynamic, young squads capable of executing the demanding playing style.
+
+-   **Consistent Brand Identity:**
+
+    -   Consistency aids seamless transitions in playing and coaching moves between Red Bull clubs. -
+    -   Not only amplifies recognition but also serves as a global ambassador, prominently displaying the Red Bull image across the world of sport.
+
+![](photos/RBtree.png){fig-align="center" width="630"}
+:::
+
+## [**Overview of Red Bull's Philosophy**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Ralph Rangnick's Revolutionary Influence***
+
+::: columns
+::: {.column width="75%"}
+::: r-fit-text
+-   Introduction of Aggressive, Proactive Gameplay:
+
+    -   Shifting from conventional to aggressive football philosophy.
+
+    -   Injecting a proactive approach focused on dominating opponents.
+
+    -   Transforming Red Bull's style into an exciting and forward-thinking brand.
+
+-   Evolution of Pressing as an Organized, Defensive Scheme:
+
+    -   Pioneering an organized pressing system in football.
+
+    -   Systematizing defensive strategies to win the ball back high up the field.
+
+    -   Departure from traditional defensive approaches, marking a football revolution.
+:::
+:::
+
+::: {.column width="25%"}
+![](photos/Ralph.png)
+:::
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**Overview of Red Bull's Philosophy**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Red Bull Style of Play***
+
+::: r-fit-text
+-   Creative, Aggressive, and Attractive Football:
+
+    -   Emphasis on combining creativity and aggression for an attractive style.
+
+    -   Maintaining high-energy gameplay to play faster than opponents and dominate matches.
+
+-   Pressing High and Intensively:
+
+    -   Committed to a relentless high press for regaining possession in attacking 3rd of the pitch.
+
+    -   Tactical cohesion with use of pressing triggers to systematically disrupt opponents and force errors.
+
+-   Strategic Build-up and Transition:
+
+    -   Initiating attacks from the defensive line utilizing direct play for switft transitions to capitalize on opportunities and score goals rapidly.
+
+-   Prioritization of Goal Scoring:
+
+    -   Explicit focus on scoring goals as the primary objective.
+
+    -   Whether it's making incisive passes, attempting dribbles, aggressive tackles or committing players forward; a willingness to take calculated risks are geared towards creating goal-scoring opportunities.
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**Overview of Red Bull's Philosophy**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Jesse Marsch's S.A.R.D. acronym to articulate his tactical approach***
+
+::: columns
+::: {.column width="75%"}
+::: r-fit-text
+-   Sprinting(S):
+
+    -   Importance of strategic sprinting, particularly in pressing situations.
+
+    -   Marsch encourages players to make twice as many out-of-possession sprints, focusing on timing and positioning.
+
+-   Alle Gemeinsam (A):
+
+    -   Stands for 'all together.'
+
+    -   Advocates for a ball-oriented pressing system where all players attack the ball collectively.
+
+-   Reingehen (R):
+
+    -   Translates to 'going in.'
+
+    -   Involves a commitment to fully attack the ball, discouraging players from stopping short of the opponent.
+
+-   Dazukommen (D):
+
+    -   Represents the second wave of the press.
+
+    -   Importance of each press wave being supported by additional players.
+:::
+:::
+
+::: {.column width="25%"}
+::: r-fit-text
+![Marsch's pressing philosophy encourages players to initiate the press when the ball is in transit, rather than waiting for it to be received by the opponent. The team commits multiple players to the ball during the press, with an awareness of the need to quickly revert to a defensive shape if the opposition manages to switch play. This comprehensive approach aims to optimize the success of the pressing strategy and create goal-scoring opportunities.](photos/Marsch.png)
+:::
+:::
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**Overview of Red Bull's Philosophy**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***NYRB 2018 Supporters Shield Winners:***
+
+#### ***The Epitome of the Red Bull Style***
+
+::: r-fit-text
+-   Frenzied, organized high press.
+
+-   Offensive Dynamics Mirroring Defensive Intensity
+
+    -   BWP leading the line: Key role in shrinking the field and initiating the press.
+
+    -   Playmakers and Midfield Disrupters: Kaku, wingers, Tyler Adams and Sean Davis intensify the high-pressure strategy.
+
+-   Direct and Intense Attack
+
+    -   Keep the ball in the opposition's half.
+
+    -   Attacking Patterns: Center backs play long to BWP, fullbacks deliver driven passes into front 4, and the midfield pivot propels direct attacks.
+
+-   Most importantly: Style translated to winning success
+
+![](photos/SupportersShield.png){fig-align="center" width="500%"}
+:::
+
+# Using Data to Define the "Red Bull Style of Play" {background-color="black" background-image="background.png" background-repeat="repeat"}
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Introduction to Tactical Data Analysis***
+
+::: r-fit-text
+-   **Objective:**
+
+    -   Conducting a tactical data analysis on the "Red Bull Style of Play".
+
+    -   Quantify and analyze the New York Red Bulls Style of Play over the past six seasons.
+
+-   **Data:**
+
+    -   Developed Python script for efficient data scraping from FBREF.com.
+
+    -   Data covers:
+
+        -   MLS Match Logs from all games in the 2018 to 2023 seasons.
+
+![](photos/fbref.png){fig-align="center" width="250%"}
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Process of Calculating Percentiles***
+
+::: r-fit-text
+-   **The What:**
+
+    -   Percentiles indicate where each club's average normalized values for each stat stand compared to the overall distribution of teams.
+
+-   **The Why:**
+
+    -   With the Red Bulls distinct, energetic and some might say unbalanced style of play they tend to be in the tail ends of the distributions of various metrics.
+    -   Percentiles were calculated to see what stats the NYRB were accumulating the most over the past 6 seasons compared to the rest of the MLS.
+    -   This helps do 2 things:
+        -   Investigate some of these variables further to see how "extreme" the play style is.
+
+        -   Use these percentiles as weights in a metric defining "Red Bull Style of Play" to value what is "important" to the style.
+
+-   **The How:**
+
+    -   First, find the mean for each variable for each club in each year.
+
+        -   $\mu_i = \text{mean}(\text{x}_i \mid (\text{club} \cap \text{year}))$
+
+    -   Next, create a normalized value based on said mean for each variable.
+
+        -   $N_i = (\mu_i - min(\mu) / (max(\mu) - min(\mu))$
+
+    -   Then, for each club take the mean of the normalized values.
+
+        -   $M_i = mean(N_i | club)$
+
+    -   Finally, calculate the percentile for the mean of the averaged normalized values.
+
+        -   $P_i = M_i / max(M)$
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+```{r}
+percentiles <- full_match_logs %>%
+  group_by(Club, Year) %>% 
+  # Mean for each club in each year
+  summarise(across(c(11:ncol(.)-2), ~mean(.))) %>%
+  ungroup() %>%
+  # Normalized value based on mean for each club in each year
+  summarise(Club, across(c(3:ncol(.), -Club), ~(. - min(.)) / (max(.) - min(.)))) %>%
+  group_by(Club) %>%
+  # Mean for said normalized value
+  summarise(across(c(2:ncol(.)-1), ~mean(.))) %>%
+  ungroup() %>%
+  # Percentile for mean of normalized value
+  summarise(Club, across(c(2:ncol(.), -Club), ~./max(.))) %>%
+  pivot_longer(cols = c(2:ncol(.)), names_to = "stat", values_to = "percentile") 
+
+rbny_percentiles <- percentiles %>% filter(Club == "NY Red Bulls") %>% arrange(desc(percentile))
+```
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Process of Calculating Style of Play Metric***
+
+::: r-fit-text
+-   **The What:**
+
+    -   A metric that can be applied for each team to each game to quantify a value that represents the "Red Bull Style of Play".
+    -   Values between 0 and 1 where as the value increases towards 1 the teams style of play for the game more closely mirrors the "Red Bull Style of Play".
+
+-   **The Why:**
+
+    -   The metric is designed to align with the Red Bull distinct style, capturing the essence of their dynamic and appealing approach to the game while showing how different they are to other teams.
+    -   Recognizes that certain statistical attributes, when exhibited by the team, contribute more significantly to embodying the distinctive and impactful style.
+    -   Enables a nuanced understanding of how closely a team's style of play mirrors the energetic and unbalanced characteristics of play.
+
+-   **The How:**
+
+    -   First, create a normalized value for each statistic for each match.
+
+        -   $N_i = (x - min(x) / (max(x) - min(x))$
+
+    -   Then, multiply normalized values by the NYRB percentile for given stat.
+
+        -   $S_i = (N_i * P_{ij} )| j = NYRB)$
+
+    -   Calculate the mean of the multiplied values for each match.
+
+        -   ${\mu}_k = mean(S_k)$
+
+    -   Normalize the means to create the metric for "Red Bull Style of Play" with values between 0 & 1.
+
+        -   ${RBSOP}_k = (\mu_k - min(\mu)) / (max(\mu) - min(\mu))$
+
+```{r}
+
+normalized <- full_match_logs %>%
+  select(Year, everything()) %>%
+  # Normalized value for each match
+  summarise(
+    Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent,
+    across(c(12:ncol(.) - 1,  -Week), ~ (. - min(.)) / (max(.) - min(.)))
+  ) %>%
+  pivot_longer(cols = c(11:ncol(.)), names_to = "stat", values_to = "normalized")
+
+RB_SOP_rating <- left_join(normalized, rbny_percentiles %>% select(-Club) %>% rename(RBNY_percentile = percentile),
+  by = "stat"
+) %>%
+  # Normalized values multiplied by Red Bull percentiles
+  mutate(RB_SOP_rating = normalized * RBNY_percentile) %>%
+  group_by(Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent) %>%
+  # Mean for each match
+  summarise(RB_SOP_rating = mean(RB_SOP_rating)) %>%
+  ungroup() %>%
+  summarise(Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent,
+    RB_SOP_rating = (RB_SOP_rating - min(RB_SOP_rating)) / (max(RB_SOP_rating) - min(RB_SOP_rating))
+  )
+
+
+ggplot(RB_SOP_rating %>% filter(Club != "NY Red Bulls"), aes(x = RB_SOP_rating)) +
+  geom_histogram(stat = "density", color = "lightblue") +
+  geom_histogram(data = RB_SOP_rating %>% filter(Club == "NY Red Bulls"), aes(x = RB_SOP_rating), stat = "density", fill = "red", alpha = .5) +
+  facet_wrap(~Year) +
+  labs(x = "RBSOP Rating", 
+       title = "Marginal Distribution of RBSOP Shows That Red Bull is more \"Red Bull\" than the Rest of the League.", 
+       subtitle = "NYRB (red) vs Rest of League (blue)")
+
+```
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+### ***Process of Calculating Win Probability***
+
+::: r-fit-text
+-   **The What:**
+
+    -   A metric that can be applied to each game signifying "how well they played" or how likely they were to win based on all statistics excluding statistics about goals.
+    -   Values between -1 and 1 where:
+        -   -1 = Loss
+        -   0 = Draw
+        -   1 = Win
+
+-   **The Why:**
+
+    -   Something to compare Red Bull Style of Play metric to.
+    -   See if there appears to be some sort of relationship with the Red Bull Style of Play and winning soccer.
+
+-   **The How:**
+
+    -   Fit a Random Forest model of games from 6 seasons regressing the Result of match based on statistics excluding goals for each team.
+
+```{r}
+#library(randomForest)
+
+set.seed(123)
+
+modeling_df <- full_match_logs %>% select(Result, Venue, c(12:ncol(.)-1), -Opponent_Gls) %>%
+  mutate(Result = case_when(
+    Result == "W" ~ 1,
+    Result == "D" ~ 0,
+    Result == "L" ~ -1
+  )) %>%
+  # Rename columns with a '/' in it to 'per'
+  rename_with(~str_replace(., "/", "per"), contains("/")) %>%
+  rename_with(~str_replace(., "-", "minus"), contains("-")) %>%
+  rename_with(~str_replace(., "\\+", "plus"), contains("+")) %>%
+  rename(Final_3rd_Passes = `1per3`,
+         Second_yellow = `2CrdY`) %>%
+  select(-c(GperSh, GperSoT, GminusxG, npGminusxG, Ast, GCA:GCA_Def, 
+            Opponent_GperSh, Opponent_GperSoT, Opponent_GminusxG, Opponent_npGminusxG, Opponent_Ast, Opponent_GCA:Opponent_GCA_Def))
+
+#rf_model <- randomForest(Result ~ ., data = modeling_df, importance = TRUE, ntree = 50)
+
+#predicted_probabilities <- predict(rf_model, modeling_df, type = "response")
+
+#match_probabilities <- full_match_logs %>% mutate(predicted_probability = predicted_probabilities) %>%
+ # select(Club, Year, Time, Round, Day, Venue, Result, GF, GA, Opponent, predicted_probability)
+
+#write.csv(match_probabilities, "match_probabilities.csv")
+match_probabilities <- read_csv("match_probabilities.csv")
+
+ggplot(match_probabilities, aes(x = (predicted_probability))) +
+  geom_histogram(binwidth = 0.05, color = "white") +
+  labs(x = "Predicted Probability of Win", y = "Count", title = "Distribution of Model Results")
+```
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="white"}
+
+### ***Evaluating NYRB Percentiles***
+
+::: {.r-fit-text height="50%"}
+-   NYRB ranks in the top percentile for 28 variables (\~11% of the time).
+
+-   Many variables with a high percentile directly relate to the distinct "Red Bull Style of Play" as described earlier.
+
+    -   Some of these variables showcase the strengths of the style as well as the weaknesses.
+
+-   Variables that have a relatively low percentile shows some of the inverse effects of the chaotic nature of the style.
+
+**New York Red Bull Percentiles:**
+
+```{r}
+library(DT)
+datatable(rbny_percentiles %>% filter(stat != "Week") %>%
+              mutate(percentile = round(percentile, 2) * 100),
+          options = list(
+            paging = TRUE,
+            searching = TRUE,
+            pageLength = 10
+          )) %>%
+  formatStyle(names(rbny_percentiles), background = '#FFCCCB', color = 'black') 
+```
+
+See Glossary on Match Log pages on [Fbref.com](Fbref.com) to get descriptions of most variables. (Please feel free to reach out if you have any questions as I also feature engineered a few variables).
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="white"}
+
+### ***Evaluating "Red Bull Statistics"***
+
+::: {.r-fit-text height="50%"}
+-   Below is just a few of potentially many graphs that can be used to visualize the distinct style of play that NYRB possesses chosen from the percentiles on the previous slide.
+
+-   The graphs show the per 90 minutes stats in each year with NYRB colored in red.
+
+-   These graphs illustrate the Red Bulls' consistent playing style over the past six seasons.
+
+-   NYRB points consistently appear away from the normal distribution, setting them apart from the rest of the league in crucial statistical categories that hold particular significance for their team.
+
+```{r fig.align = 'center'}
+
+relationship_plot <- function(xvalue, yvalue, title = NULL, xlab = NULL, ylab = NULL, nudge = NULL) {
+  plot_df <- full_match_logs %>%
+    group_by(Club, Year) %>%
+    summarise(
+      xvalue = mean({{ xvalue }}),
+      yvalue = mean({{ yvalue }})
+    )
+
+  gg <- ggplot(plot_df, aes(x = xvalue, y = yvalue)) +
+    geom_point(
+      aes(
+        text = paste(
+          "Year: ", Year, "\nClub: ", Club,
+          "\n", deparse(xlab), ": ", round(xvalue, 2),
+          "\n", deparse(ylab), ": ", round(yvalue, 2)
+        )
+      ),
+      alpha = 0.25, size = 5
+    ) +
+    geom_point(
+      data = plot_df %>% filter(Club == "NY Red Bulls"),
+      aes(
+        text = paste(
+          "Year: ", Year, "\nClub: ", Club,
+          "\n", deparse(xlab), ": ", round(xvalue, 2),
+          "\n", deparse(ylab), ": ", round(yvalue, 2)
+        )
+      ), color = "Red", size = 5
+    ) +
+    geom_text(
+      data = plot_df %>% filter(Club == "NY Red Bulls"),
+      aes(label = Year), nudge_x = 0, nudge_y = nudge, size = 5
+    ) +
+    geom_segment(
+      data = plot_df %>% filter(Club == "NY Red Bulls"),
+      aes(
+        x = xvalue, y = yvalue,
+        xend = xvalue, yend = yvalue + nudge
+      ),
+      color = "red"
+    ) +
+    labs(title = title, x = xlab, y = ylab, color = "NYRB")
+
+  ggplotly(gg, tooltip = c("text"))
+}
+
+full_match_logs <- full_match_logs %>% mutate(Tkl_Mid_Tkl_Att3rd = Tkl_Mid_3rd + Tkl_Att_3rd)
+
+relationship_plot(Tkl_Mid_Tkl_Att3rd, Tkl_pct,
+  "Excellent Tackle Success Rate Despite the High Number of Tackles Coming High Up the Pitch",
+  "Tackles in Middle + Tackles in Attacking 3rds per 90",
+  "Tackle Win Percentage per 90",
+  nudge = 1
+)
+relationship_plot(Opponent_Touch_Def3rd_prop, Touch_Att3rd_prop,
+  "Majority of Touches for Both Teams Occurs in NYRB Attacking End Resulting in NYRB Dominating Games.",
+  "Proportion of Opposition Team's Touches Taken in Defensive Third per 90",
+  "Proportion of Team's Touches Taken in Attacking Third per 90",
+  nudge = .005
+)
+
+relationship_plot(SCA_Def, Sh_per_poss,
+  "NYRB is Faster than Ever, Higher Number of Shots in Last 3 Years Coming from Defensive Actions \nResult in a High Shots per Possession.",
+  "Shot Creating Actions Resulting from Defensive Actions per 90",
+  "Shots per Possession per 90",
+  nudge = 0.005
+)
+
+relationship_plot(Opponent_Long_Pass_prop, Opponent_npxGperShot,
+  "Aggresive Pressure Opens Game Up which Entices Opponents to Play Long to Create High Quality \nShooting Opportunities",
+  "Opponent's Proporition of Passes That Go Long per 90",
+  "Opponents Non-Penalty xG per Shot per 90",
+  nudge = 0.005
+)
+
+full_match_logs <- full_match_logs %>% mutate(
+  Aerial_Total = Aerial_Won + Aerial_Lost,
+  Recov_Total = Recov + Opponent_Recov
+)
+
+relationship_plot(Recov_Total, Aerial_Total,
+  "Extremely High Numbers of Recoveries and Aerial Duels for Both Teams Show the Uncontrolled and \nChaotic Nature of the Style of Play.",
+  "Number of Combinded Recoveries per 90",
+  "Number of Aerial Duels per 90",
+  nudge = 1
+)
+
+full_match_logs <- full_match_logs %>% mutate(
+  Opponent_TI_Dead = Opponent_TI + Opponent_Dead,
+  TI_Dead = TI + Dead
+)
+
+relationship_plot(Opponent_TI_Dead, TI_Dead,
+                  "Chaotic Nature Results in the Most Out-of-Bounds and Dead Ball Situations.",
+                  "Opponent Throw Ins + Dead Ball Passes per 90",
+                  "Team Throw Ins + Dead Ball Passes per 90",
+                  nudge = 1)
+
+relationship_plot(Opponent_Blocks_Pass, Cmp_pct,
+                  "Completing a High Percentage of Passes is not in the Red Bull Ideology, but IMO this is Unacceptable \nfor a Team Striving to Win MLS Cup.",
+                  "Opponent Blocked Passes per 90",
+                  "Completition Percentage per 90",
+                  nudge = 1)
+```
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**"Red Bull Style of Play"**]{.underline} {.scrollable .scrollable background-color="white"}
+
+### ***Evaluation on RBSOP and Win Probability Scale***
+
+::: r-fit-text
+-   Use previously defined Red Bull Style of Play metric and Win Probabilities to investigate the "Red Bull Style of Play" and how it relates to winning soccer.
+
+-   The graph looks at the per 90 minute RBSOP and Winning Probability for each season.
+
+-   Jesse Marsch's 2018 Red Bull team is the relative standout from recent seasons as their style of play best translated to winning success across the entirety of the season.
+
+```{r fig.align='center'}
+
+SOP_MP <- left_join(RB_SOP_rating %>% mutate(GF = as.numeric(GF),
+                                             GA = as.numeric(GA)), match_probabilities) %>% group_by(Club, Year) %>% 
+  mutate(predicted_probability = predicted_probability) %>% 
+  summarise(across(c(RB_SOP_rating, predicted_probability), ~mean(.))) %>% ungroup()
+plot <- ggplot(SOP_MP, aes(x = RB_SOP_rating, y = predicted_probability)) +
+  geom_vline(xintercept = 0.5, color = "black") +
+  geom_hline(yintercept = 0, color = "black") +
+  geom_point(aes(
+    text = paste(
+          "Year: ", Year, "\nClub: ", Club,
+          "\n Red Bull Style of Play Rating per 90: ", round(RB_SOP_rating, 2),
+          "\n Win Probability per 90: ", round(predicted_probability, 2)
+        )
+  ), alpha = 0.25, size = 2) +
+  geom_point(data = SOP_MP %>% filter(Club == "NY Red Bulls"),
+             aes(
+               text = paste(
+          "Year: ", Year, "\nClub: ", Club,
+          "\n Red Bull Style of Play Rating per 90: ", round(RB_SOP_rating, 2),
+          "\n Win Probability per 90: ", round(predicted_probability, 2)
+        )
+             ),
+             color = "red", size = 5)  +
+  geom_text(
+      data = SOP_MP %>% filter(Club == "NY Red Bulls"),
+      aes(label = Year), nudge_x = 0, nudge_y = .025, size = 5
+    ) +
+    geom_segment(
+      data = SOP_MP %>% filter(Club == "NY Red Bulls"),
+      aes(
+        x = RB_SOP_rating, y = predicted_probability,
+        xend = RB_SOP_rating, yend = predicted_probability + .025
+      ),
+      color = "red"
+    ) +
+  geom_text(aes(x = 0.355, y = 0.2, label = "Performed Well \nDid Not Play Like Red Bull"), size = 3.5) +
+  geom_text(aes(x = 0.355, y = -0.35, label = "Performed Poor \nDid Not Play Like Red Bull"), size = 3.5) +
+  geom_text(aes(x = 0.6825, y = -0.35, label = "Performed Poor \nPlayed Like Red Bull"), size = 3.5) +
+geom_text(aes(x = 0.6825, y = 0.2, label = "Performed well \nPlayed Like Red Bull"), size = 3.5) +
+  labs(x = "Red Bull Style of Play Metric per 90",
+       y = "Win Probability per 90")
+ggplotly(plot,tooltip = c("text"))
+```
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+# The Red Wedding {background-color="black" background-image="background.png" background-repeat="repeat"}
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+
+## [**The Red Wedding**]{.underline} {.scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+#### ***Data Analysis of NYRB's 7-0 Win over NYCFC***
+
+::: r-fit-text
+-   **Task:**
+
+    -   Using provided StatsBomb event data from the 2016 game to tell the "Story of the Game."
+
+-   **Overview of the Game:**
+
+    -   Not one, but two Dax McCarty headers.
+    -   A Bradley Wright-Phillips bicycle kick.
+    -   It was the perfect storm for the Red Bulls, who concluded their fourth game against NYCFC with seven goals on the scoresheet.
+    -   The final scoreline of 7-0 remains tied for the largest margin of victory in MLS history.
+
+    ![](photos/BWP.jpeg){fig-align="center"}
+
+    ![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**The Red Wedding**]{.underline} {.scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+#### ***The Story of The Game***
+
+::: r-fit-text
+-   Red Bulls Dominated.
+-   Even though NYCFC held onto the ball for longer periods of time it was NYRB who dominated the field positioning as the majority of the game was played in their attacking 3rd.
+-   The high field positioning resulted in consistent plays of positive Net On Ball Value showcasing how NYRB was purposeful with doing the right things and playing forward.
+-   NYRB was structurally position high up the field in both defense and attack.
+-   The Red Bull Press Never Stops.
+
+```{r}
+
+# Field Tilt Plot
+field_tilt_plot <- match_focused %>%
+  mutate(minute3 = floor(minute / 3) * 3) %>%
+  count(minute3, team, area) %>%
+  group_by(minute3, area) %>%
+  mutate(
+    total = sum(n),
+  ) %>%
+  filter(area == "Attacking 3rd" & team == "New York Red Bulls") %>%
+  mutate(
+    prop = n / total,
+    dominating = ifelse(prop >= 0.5, "Yes", "No")
+  )
+
+ggplot(field_tilt_plot, aes(x = minute3, y = prop)) +
+  geom_ribbon(aes(ymax = 0.5, ymin = pmin(prop, .5)), fill = "lightblue", alpha = 0.75) +
+  geom_ribbon(aes(ymax = pmax(prop, .5), ymin = 0.5), fill = "red", alpha = 0.75) +
+  geom_emoji(
+    data = shots %>% filter(shot_outcome_name == "Goal") %>% mutate(minute3 = floor(minute / 3) * 3),
+    aes(x = minute3, y = 1.11), emoji = "26bd", size = .03
+  ) +
+  labs(
+    title = "NYRB Dominated the Field Positioning Battle in the 1st Half.",
+    x = "Minute",
+    y = "Field Tilt",
+    subtitle = "Field Tilt is the proportion of touches taken by NYRB in Attacking 3rd compared to \nsum of Attacking 3rd Touches for Both Teams for every 3 minute interval."
+  )
+
+# Possession Tilt Plot
+possession_tilt_plot <- match_focused %>%
+  mutate(minute3 = floor(minute / 3) * 3) %>%
+  group_by(minute3, team) %>%
+  summarise(time_in_poss_3 = sum(time_in_poss)) %>%
+  group_by(minute3) %>%
+  mutate(prop = time_in_poss_3 / sum(time_in_poss_3)) %>%
+  filter(team == "New York Red Bulls") 
+ggplot(possession_tilt_plot, aes(x = minute3, y = prop)) +
+  geom_ribbon(aes(ymax = 0.5, ymin = pmin(prop, .5)), fill = "lightblue", alpha = 0.75) +
+  geom_ribbon(aes(ymax = pmax(prop, .5), ymin = 0.5), fill = "red", alpha = 0.75) +
+  geom_point(
+    data = shots %>% filter(team == "New York Red Bulls") %>% mutate(minute3 = floor(minute / 3) * 3),
+    aes(x = minute3, y = .75), size = 3, color = "red", alpha = 0.75
+  ) +
+  geom_point(
+    data = shots %>% filter(team == "Opposition") %>% mutate(minute3 = floor(minute / 3) * 3),
+    aes(x = minute3, y = .1), size = 3, color = "lightblue", alpha = 0.75
+  ) +
+  labs(
+    x = "Minute", y = "Possession Tilt",
+    title = "NYCFC consistently saw more of the ball throughout the match but didn't create many shooting opportunities with their spells of possession.",
+    subtitle = "Possession Tilt is the proportion of time in possession for NYRB compared to \nsum of time in possession for Both Teams for every 3 minute interval. (Dots are shots)."
+  )
+
+
+
+# Net On Ball Value Tilt Plot
+obv_net_tilt <- match_focused %>%
+  mutate(minute5 = floor(minute / 5) * 5) %>%
+  group_by(minute5, team) %>%
+  summarise(obv_for_net_3 = sum(obv_for_net, na.rm = T)) %>%
+  group_by(minute5) %>%
+  mutate(prop = obv_for_net_3 / sum(obv_for_net_3, na.rm = T)) %>%
+  filter(team == "New York Red Bulls")
+
+ggplot(obv_net_tilt, aes(x = minute5, y = prop)) +
+  geom_ribbon(aes(ymax = 0, ymin = pmin(prop, 0)), fill = "lightblue", alpha = 0.75) +
+  geom_ribbon(aes(ymax = pmax(prop, 0), ymin = 0), fill = "red", alpha = 0.75) +
+  geom_emoji(
+    data = shots %>% filter(shot_outcome_name == "Goal") %>% mutate(minute5 = floor(minute / 5) * 5),
+    aes(x = minute5, y = 3), emoji = "26bd", size = .03
+  ) +
+  labs(
+    x = "Minute", y = "Net On Ball Value Tilt",
+    title = "NYRB had a dominating period before half-time, making substantially more net positive plays than NYCFC.",
+    subtitle = "Net On-Ball Value Tilt is the proportion of net on ball value for NYRB compared to \nsum of net on ball value for Both Teams for every 5-minute interval."
+  )
+
+
+positions_plot <- passes %>%
+  filter(team == "New York Red Bulls" & minute < 67) %>%
+  filter(is.na(pass_outcome_name)) %>%
+  group_by(db_player_pass_recipient_id) %>%
+  summarise(
+    mean_x = mean(pass_end_location_x),
+    mean_y = mean(pass_end_location_y)
+  )
+ggplot(positions_plot, aes(x = mean_x, y = mean_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_point(color = "red", size = 5) +
+  labs(title = "Average Positions of NYRB Starters based on Pass Receptions",
+       subtitle = "With A domination of Field Tilt NYRB starters were positioned structurally high up the field in the looks of their typical 4-2-3-1.\n The offensive shape shows a good balance of width and verticality.",
+       x = "Player Average Reception x",
+       y = "Player Average Reception y")
+
+player_pass_network <- passes %>%
+  filter(team == "New York Red Bulls" & minute < 67) %>%
+  filter(db_player_id != 2430) %>%
+  filter(is.na(pass_outcome_name)) %>%
+  group_by(db_player_id, db_player_pass_recipient_id) %>%
+  mutate(`Number of Passes Between Players` = n()) %>%
+  group_by(db_player_pass_recipient_id) %>%
+  mutate(
+    mean_reception_x = mean(pass_end_location_x),
+    mean_reception_y = mean(pass_end_location_y)
+  ) %>%
+  group_by(db_player_id) %>%
+  mutate(
+    mean_pass_location_x = mean(pass_end_location_x),
+    mean_pass_location_y = mean(pass_end_location_y)
+  ) %>%
+  distinct(db_player_id, db_player_pass_recipient_id, mean_reception_x, mean_reception_y, mean_pass_location_x, mean_pass_location_y, `Number of Passes Between Players` , .keep_all = TRUE)
+
+
+ggplot(player_pass_network, aes(x = mean_reception_x, y = mean_reception_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_segment(
+    aes(
+      xend = mean_pass_location_x, yend = mean_pass_location_y, x = mean_reception_x, y = mean_reception_y,
+      lwd = `Number of Passes Between Players` 
+    ), alpha = 0.5,
+    arrow = arrow(length = unit(0.1, "cm")), 
+  ) +
+  geom_point(aes(x = mean_pass_location_x, y = mean_pass_location_y), color = "darkblue", size = 5) +
+  geom_point(color = "red", size = 2) +
+  facet_wrap(~db_player_id, ncol = 2) +
+  labs(title = "Pass Network of NYRB Starters", subtitle = "The mean direction and length accompained with frequency of passes between players. \n(Blue represent player making pass to distinct teammates in red)\nRed Bull Players Regularly looked to play positive with a majority of their passes going forward into front players who would have a variety of options.",
+       x = "Player Location x and Teammate Pass Reception x",
+       y = "Player Location y and Teammate Pass Reception y")
+
+positions_plot2 <- duels %>%
+  filter(team == "New York Red Bulls" & minute < 67 & event_type %in% c(
+    "Pressure", "Duel", "Ball Recovery","Block"
+  ) & area %in% c("Attacking 3rd")) %>%
+  group_by(db_player_id) %>%
+  summarise(
+    mean_x = mean(location_x),
+    mean_y = mean(location_y)
+  )
+ggplot(positions_plot2, aes(x = mean_x, y = mean_y)) +
+  annotate_pitch(dimensions = pitch_statsbomb) +
+  geom_point(color = "red", size = 5) +
+  labs(title = "Average Positions of NYRB Starters based on Defensive Actions in Attacking 3rd",
+       subtitle = "NYRB press so high that the average position of the whole team for defensive attactions in the attacking third is tight to 18 yard box. \n Even with this high press NYRB maintain a good balanced shape that is difficult to play out of.",
+       x = "Player Average Reception x",
+       y = "Player Average Reception y")
+
+duels %>%
+  filter(event_type %in% c(
+    "Pressure", "Duel", "Ball Recovery",
+    "Block"
+  ) & team == "New York Red Bulls") %>%
+  mutate(minute3 = floor(minute / 3) * 3) %>%
+  count(minute3, team, event_type) %>%
+  group_by(team, event_type) %>%
+  mutate(
+    cumsum = cumsum(n)
+  ) %>%
+  ggplot(aes(x = minute3, y = cumsum, color = event_type)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Even if the Score is 7-0... The Red Bulls Never Stop Pressing!", x = "Minute", y = "Cumulative Number of Events") +
+  scale_color_manual(values = c(
+    "Pressure" = "red",
+    "Duel" = "blue",
+    "Ball Recovery" = "green",
+    "Block" = "orange"
+  )) 
+```
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
+
+## [**Concluding Thoughts**]{.underline} {.scrollable background-color="black" background-image="background.png" background-repeat="repeat"}
+
+::: r-fit-text
+In this presentation, we delved into the distinctive philosophy and style of play embraced by the New York Red Bulls, commonly known as "The Red Bull Way." From the foundational principles established by Dietrich Mateschitz's vision to the influential role of Ralph Rangnick in shaping an aggressive and proactive gameplay, we explored the dynamic and unique approach that sets the Red Bulls apart.
+
+The philosophy extends beyond the pitch, integrating business and football management into a cohesive strategy, creating a global network of clubs and players that share a consistent style. The emphasis on creativity, aggression, and an attractive brand of football became evident through strategic build-up, high-intensity pressing, and a relentless pursuit of goal-scoring opportunities.
+
+Our analysis went further by using data from match logs to quantify and define the "Red Bull Style of Play." We introduced a metric that measures how closely a team's style mirrors the energetic and unbalanced characteristics of the Red Bull approach. The evaluation of percentiles highlighted key variables where the Red Bulls consistently excel or face challenges, providing a nuanced understanding of their distinctive playstyle.
+
+Additionally, we explored the relationship between the Red Bull Style of Play metric and win probabilities, showcasing how the team's unique approach correlates with success on the field. Jesse Marsch's 2018 team stood out as a remarkable example of successfully translating their style into winning soccer.
+
+Finally, we conducted a detailed analysis of a historic game -- the 7-0 victory over NYCFC. The "Red Wedding" witnessed an extraordinary performance, with goals reflecting the team's dominance, purposeful play, and relentless pressing.
+
+For next steps, ideally what I would have liked to do for this project was to apply my RBSOP metric to this one particular game to see how it stacks up to the distribution compared to the rest of the games in terms of the "Red Bull Style of Play". Given a sufficient amount of data the metric can be reproduced, better evaluated, potentially altered and improved. I also had the intention of comparing NYRB to an MLS adjusted version of RB Leipzig (I had the data scraped and everything), but due to a lack of time I'll have to save that analysis for another day.
+
+In conclusion, the Red Bull philosophy and style of play represent a holistic approach that transcends traditional boundaries between business and sports. The commitment to an aggressive and attractive brand of football, coupled with data-driven analysis, defines the Red Bull Way and shapes the team's success on the field.
+
+Please let me know if you have any questions or request further insights. I am looking forward to hearing your feedback.
+
+Sincerly,
+
+Shane Hauck Carnegie Mellon University --- Masters of Applied Data Science Personal Email: hauckshane\@gmail.com School Email: shauck\@andrew.cmu.edu Phone: (203) 501 - 9173
+
+![](photos/RBNYlogo.png){fig-align="center" width="100"}
+:::
